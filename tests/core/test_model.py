@@ -13552,6 +13552,31 @@ def test_external_model_does_not_inherit_model_defaults_gateway() -> None:
     assert explicit_external_model.gateway == "source_gateway"
 
 
+def test_external_model_default_statements_comparison() -> None:
+    def external_model(statement: str):
+        return create_external_model(
+            "source_schema.source",
+            defaults=ModelDefaultsConfig(pre_statements=[statement]).dict(),
+            dialect="duckdb",
+        )
+
+    v1 = external_model("@tag_query('v1')")
+    v1_commented = external_model("@tag_query('v1') /* comment */")
+    v2 = external_model("@tag_query('v2')")
+
+    # External models keep inheriting the default statements
+    assert v1.pre_statements
+
+    # The macro is not defined anywhere, so the statements are compared as written
+    assert v1.is_metadata_only_change(v2) is False
+    assert v1.is_metadata_only_change(v1_commented) is True
+
+    # Statements that can be rendered are still compared rendered
+    plain = external_model("SET threads = 2")
+    rewritten = external_model("@IF(TRUE, SET threads = 2)")
+    assert plain.is_metadata_only_change(rewritten) is True
+
+
 def test_no_gateway_uses_global_default_catalog():
     """
     Control test: when a model does NOT specify a gateway, the global

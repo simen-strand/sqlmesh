@@ -1083,6 +1083,10 @@ class _Model(ModelMeta, frozen=True):
         """
         raise NotImplementedError
 
+    def _comparable_statement(self, statement: exp.Expr) -> t.Union[exp.Expr, t.List[exp.Expr]]:
+        # The form of a statement that is_metadata_only_change compares
+        return self._statement_renderer(statement).render() or statement
+
     def is_metadata_only_change(self, other: _Node) -> bool:
         if self._is_metadata_only_change_cache.get(id(other), None) is not None:
             return self._is_metadata_only_change_cache[id(other)]
@@ -1109,13 +1113,9 @@ class _Model(ModelMeta, frozen=True):
                 is_metadata_change = False
             else:
                 for this_statement, other_statement in zip(this_statements, other_statements):
-                    this_rendered = (
-                        self._statement_renderer(this_statement).render() or this_statement
-                    )
-                    other_rendered = (
-                        other._statement_renderer(other_statement).render() or other_statement
-                    )
-                    if this_rendered != other_rendered:
+                    if self._comparable_statement(this_statement) != other._comparable_statement(
+                        other_statement
+                    ):
                         is_metadata_change = False
                         break
 
@@ -1973,6 +1973,14 @@ class ExternalModel(_Model):
 
     kind: ModelKind = ExternalKind()
     source_type: t.Literal["external"] = "external"
+
+    def _comparable_statement(self, statement: exp.Expr) -> t.Union[exp.Expr, t.List[exp.Expr]]:
+        # External models are never evaluated and are loaded without the project's macros, so a
+        # statement that calls a project macro can't be rendered; compare it as written instead.
+        try:
+            return super()._comparable_statement(statement)
+        except ConfigError:
+            return statement
 
     def is_breaking_change(self, previous: Model) -> t.Optional[bool]:
         if not isinstance(previous, ExternalModel):

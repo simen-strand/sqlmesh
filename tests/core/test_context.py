@@ -4354,6 +4354,66 @@ ON_VIRTUAL_UPDATE_END;
     assert model.on_virtual_update[1].sql() == "SELECT 'Model-specific update' AS message"
 
 
+@pytest.mark.parametrize("statements_key", ["pre_statements", "post_statements"])
+def test_external_model_default_statements_with_project_macro_change(
+    tmp_path: Path, statements_key: str
+):
+    (tmp_path / "models").mkdir()
+    (tmp_path / "macros").mkdir()
+    (tmp_path / "macros" / "tag.py").write_text(
+        """
+from sqlmesh import macro
+
+@macro()
+def tag_query(evaluator, tag):
+    return f"SELECT {tag} AS tag"
+"""
+    )
+    (tmp_path / "external_models.yaml").write_text(
+        """
+- name: source_schema.source
+  columns:
+    id: int
+"""
+    )
+    (tmp_path / "models" / "model_a.sql").write_text(
+        """
+MODEL (name test_schema.model_a, kind FULL);
+
+SELECT id FROM source_schema.source
+"""
+    )
+
+    def write_config(version: str) -> None:
+        (tmp_path / "config.yaml").write_text(
+            f"""
+gateways:
+    local:
+        connection:
+            type: duckdb
+            database: {tmp_path / "db.duckdb"}
+model_defaults:
+    dialect: duckdb
+    {statements_key}:
+        - "@tag_query('{version}')"
+"""
+        )
+
+    write_config("v1")
+    ctx = Context(paths=[tmp_path])
+    ctx.engine_adapter.execute("CREATE SCHEMA source_schema")
+    ctx.engine_adapter.execute("CREATE TABLE source_schema.source AS SELECT 1 AS id")
+    ctx.plan(auto_apply=True, no_prompts=True)
+
+    write_config("v2")
+    ctx = Context(paths=[tmp_path])
+    plan = ctx.plan(no_prompts=True)
+
+    external = next(s for s in plan.new_snapshots if s.is_external)
+    assert getattr(external.model, statements_key)
+    assert external.change_category == SnapshotChangeCategory.NON_BREAKING
+
+
 def test_uppercase_gateway_external_models(tmp_path):
     # Create a temporary SQLMesh project with uppercase gateway name
     config_py = tmp_path / "config.py"
